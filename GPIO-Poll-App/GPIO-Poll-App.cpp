@@ -9,7 +9,7 @@
 //         |    |    |    |    |    |    |    |    |     |    |    |    
 //OUTPUTS  8    9    10   11   12   13   14   15   16    17   18   19
 
-#include "stdafx.h"
+#include <tchar.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "..\uio48DLL.h"
@@ -19,40 +19,47 @@
 #include <bitset>
 #include <process.h>
 
-#define FALLINGEDGE 0
-#define RISINGEDGE 1
+
+//loopback plug connects nibbles of third port, and then connects the other two to each other.
+
+#define FALLING_EDGE 0
+#define RISING_EDGE 1
 #define PORTCNT 3
 #define PORTSZ 8
 #define UIOCNT 24
 
-//loopback plug connects nibbles of third port, and then connects the other two to each other.
 
-//SetIOMask -- should you be able to toggle input  output on locked port?
-
-//Reads and prints inputs (Inputs should be port 0, and the second half of port 2)
+//Waits for interrupts, and prints which line is toggled.(Inputs should be port 0, and the second half of port 2)
 void readInputsThread(void *)
 {
-	unsigned int reading=0;
-	unsigned int readnib=0;
-	unsigned int readbit = 0;
+	int errcode = 0;
+	unsigned int timeout = 50000; //50 seconds
+	unsigned int irqArr[PORTCNT];
+
+	if(GetInterrupt(irqArr))
+		std::cout << "Failed to get interrupts\n";
+
+	std::cout << "IRQ Array is : " << irqArr[0] << "\n";
+	for (int i = 0; i < UIOCNT; ++i)
+    {
+		if (((irqArr[i / PORTSZ]) & (1 << (i % PORTSZ))) > 0)
+			std::cout << "Interrupt occured on bit : " << i << "\n";
+	}
+
 	while (1)
 	{
-		readnib = 0;
-		if (ReadPort(0,&reading))
-			std::cout << "Failed to read\n";
+		errcode = 0;
+		if(errcode = WaitForInterrupt(irqArr, timeout))
+			std::cout << "Failed to wait for interrupt with error code : "<< errcode <<"\n";
 
-		for (int j = 20; j < 24; ++j) //reads second nibble of port 2
+        //
+		for (int i = 0; i < UIOCNT; ++i)
 		{
-			if (ReadBit(j, &readbit))
-				std::cout << "Failed to read\n";
-			if (readbit)
-				readnib = readnib | (readbit << j-20);
+			if (((irqArr[i / PORTSZ]) & (1 << (i % PORTSZ))) > 0)
+				std::cout << "Interrupt occured on bit :"<< i <<"\n";
 		}
 
-		std::bitset<8> binreadbyte(reading);
-		std::bitset<4> binreadnib(readnib);
-		std::cout << "UIO 8-1 + 24-21: " << binreadbyte << " + "<<binreadnib<<"\n";
-		Sleep(1000); //1 second sleep
+		Sleep(100);
 	}
 }
 
@@ -64,12 +71,18 @@ int _tmain(int argc, _TCHAR* argv[])
 
 	//Setting up 
 	unsigned int testread = 1;
-	unsigned int portTest[3];
-	unsigned int maskTest[3];
+	unsigned int irqArr[PORTCNT];
+	unsigned int portTest[PORTCNT];
+	unsigned int maskTest[PORTCNT];
 	portTest[0] = 0x00;
 	portTest[1] = 0xFF;
 	portTest[2] = 0x0F;
-	try{
+
+    //demonstrate wait timeout 
+
+
+	try
+    {
 		if (errCode = InitializeSession())
 		{
 			std::cout << "Failed to initialize session.\n";
@@ -96,7 +109,7 @@ int _tmain(int argc, _TCHAR* argv[])
 			throw errCode;
 		}
 
-		for (int i = 0; i < 3; ++i) //ensure get and set are functioning as expected
+		for (int i = 0; i < PORTCNT; ++i) //ensure get and set are functioning as expected
 		{
 			if (portTest[i] != maskTest[i])
 			{
@@ -105,12 +118,43 @@ int _tmain(int argc, _TCHAR* argv[])
 			}
 		}
 
-		_beginthread(readInputsThread, 0, NULL); //kicks off thread that reads and prints inputs
+		//set first port to have rising edge interrupts
 
+
+		for (int i = 0; i < PORTSZ; ++i){
+			if (errCode = EnableInterrupt(i, RISING_EDGE))
+			{
+				std::cout << "Failed to enable interrupt.\n";
+				throw errCode;
+			}
+		}
+
+		//set second half of third port to have falling edge interrupts
 		
+		for (int i = 20; i < 24; ++i){
+			if (errCode = EnableInterrupt(i, FALLING_EDGE))
+			{
+				std::cout << "Failed to enable interrupt.\n";
+				throw errCode;
+			}
+		}
+
+		std::cout << "Testing Wait for Interrupt's timeout with 5 seconds\n";
+
+		if (WaitForInterrupt(irqArr, 500) == TIMEOUT_ERROR)
+		{
+			std::cout << "WaitForInterrupt successfully threw a timeout error\n";
+		}
+		else{
+			std::cout << "Timeout failed to work correctly\n";
+		}
+
+		_beginthread(readInputsThread, 0, NULL); //kicks off thread that reads and prints inputs
 
 		while (1)
 		{
+            //loops through all outputs
+			
 			for (int i = 8; i < 20; ++i) //each loop does a set bit and then clears it after one second
 			{
 
@@ -119,13 +163,20 @@ int _tmain(int argc, _TCHAR* argv[])
 					std::cout << "Failed to set bit : " << i << "\n";
 					throw errCode;
 				}
+				else
+					std::cout << "Bit " << i << " set\n";
+
 				Sleep(1000); //sleep one second
+
 				if (errCode = ClearBit(i))
 				{
 					std::cout << "Failed to clear bit: " << i << "\n";
 					throw errCode;
 				}
+				else
+					std::cout << "Bit " << i << " cleared\n";
 			}
+            
 		}
 
 		if (errCode = ResetDevice())
@@ -168,10 +219,10 @@ int _tmain(int argc, _TCHAR* argv[])
 		default:
 			std::cout << "Unkown error!\n";
 		}
-		//system("pause");
+		system("pause");
 		return err;
 	}
-	//system("pause");
+	system("pause");
 	return 0;
 }
 
