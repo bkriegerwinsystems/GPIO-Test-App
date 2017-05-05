@@ -29,13 +29,15 @@
 
 //SetIOMask -- should you be able to toggle input  output on locked port?
 
+BOOL quitFlag = FALSE;
+
 //Reads and prints inputs (Inputs should be port 0, and the second half of port 2)
 void readInputsThread(void *)
 {
 	unsigned int reading=0;
 	unsigned int readnib=0;
 	unsigned int readbit = 0;
-	while (1)
+	while (!quitFlag)
 	{
 		readnib = 0;
 		if (ReadPort(0,&reading))
@@ -54,6 +56,7 @@ void readInputsThread(void *)
 		std::cout << "UIO 8-1 + 24-21: " << binreadbyte << " + "<<binreadnib<<"\n";
 		Sleep(1000); //1 second sleep
 	}
+	_endthread();
 }
 
 
@@ -66,11 +69,12 @@ int _tmain(int argc, _TCHAR* argv[])
 	unsigned int testread = 1;
 	unsigned int portTest[3];
 	unsigned int maskTest[3];
-	portTest[0] = 0x00;
+
+	portTest[0] = 0x00;			//setting up vars for iomask (Port 0 Input, Port 1 Output, Port 2[1-4] output, Port2[5-8] input)
 	portTest[1] = 0xFF;
 	portTest[2] = 0x0F;
 	try{
-		if (errCode = InitializeSession())
+		if (errCode = InitializeSession()) //get handle to driver
 		{
 			std::cout << "Failed to initialize session.\n";
 			throw errCode;
@@ -78,8 +82,8 @@ int _tmain(int argc, _TCHAR* argv[])
 		else
 			std::cout << "Driver Initialized.\n";
 
-		if (errCode = ResetDevice())
-		{ //make sure in clean state after initialization
+		if (errCode = ResetDevice()) //make sure in clean state after initialization
+		{ 
 			std::cout << "Failed to reset ports.\n";
 			throw errCode;
 		}
@@ -126,18 +130,27 @@ int _tmain(int argc, _TCHAR* argv[])
 					throw errCode;
 				}
 			}
-		}
+			std::cout << "\n**********\nBit walk complete. Press q to quit, or any other key to restart walk\n***********\n";
+			_kbhit();
 
-		if (errCode = ResetDevice())
-		{ //clean gpio states before closing
-			std::cout << "Failed to reset ports.\n";
-			throw errCode;
-		}
+			if (_getch() == 'q')
+			{
+				quitFlag = TRUE;
+				if (errCode = ResetDevice())
+					{
+						std::cout << "Failed to disable timer.\n";
+						throw errCode;
+					}
 
-		if (errCode = CloseSession())
-		{
-			std::cout << "Failed to close session.\n";
-			throw errCode;
+					if (errCode = CloseSession())
+					{
+						std::cout << "Failed to close Driver.\n";
+						throw errCode;
+					}
+					std::cout << "WDT closed. Exiting\n";
+					break;
+			}
+			
 		}
 
 	}
@@ -168,10 +181,9 @@ int _tmain(int argc, _TCHAR* argv[])
 		default:
 			std::cout << "Unkown error!\n";
 		}
-		//system("pause");
+		system("pause");
 		return err;
 	}
-	//system("pause");
 	return 0;
 }
 

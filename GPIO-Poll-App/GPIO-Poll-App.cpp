@@ -1,4 +1,4 @@
-// GPIO-Test-App.cpp : Defines the entry point for the console application.
+//
 //0 input 1 output
 //
 //UIO MAPPING WITH LOOPBACK
@@ -28,31 +28,35 @@
 #define PORTSZ 8
 #define UIOCNT 24
 
+BOOL quitFlag = FALSE;
 
-//Waits for interrupts, and prints which line is toggled.(Inputs should be port 0, and the second half of port 2)
+//Waits for interrupts, and prints which line they are detected on.(Inputs should be port 0, and the second half of port 2)
 void readInputsThread(void *)
 {
 	int errcode = 0;
-	unsigned int timeout = 50000; //50 seconds
+	unsigned int timeout = 50000; //5 seconds
 	unsigned int irqArr[PORTCNT];
 
 	if(GetInterrupt(irqArr))
 		std::cout << "Failed to get interrupts\n";
 
-	std::cout << "IRQ Array is : " << irqArr[0] << "\n";
+	std::cout << "Should see interrupts occur on all of port 0 (bits[0-7]).\n";
+
 	for (int i = 0; i < UIOCNT; ++i)
     {
 		if (((irqArr[i / PORTSZ]) & (1 << (i % PORTSZ))) > 0)
 			std::cout << "Interrupt occured on bit : " << i << "\n";
 	}
 
-	while (1)
+	while (!quitFlag)
 	{
 		errcode = 0;
-		if(errcode = WaitForInterrupt(irqArr, timeout))
-			std::cout << "Failed to wait for interrupt with error code : "<< errcode <<"\n";
+		if (errcode = WaitForInterrupt(irqArr, timeout))
+		{
+			std::cout << "Failed to wait for interrupt with error code : " << errcode << "\n";
+			continue;
+		}
 
-        //
 		for (int i = 0; i < UIOCNT; ++i)
 		{
 			if (((irqArr[i / PORTSZ]) & (1 << (i % PORTSZ))) > 0)
@@ -61,6 +65,7 @@ void readInputsThread(void *)
 
 		Sleep(100);
 	}
+	_endthread();
 }
 
 
@@ -74,12 +79,10 @@ int _tmain(int argc, _TCHAR* argv[])
 	unsigned int irqArr[PORTCNT];
 	unsigned int portTest[PORTCNT];
 	unsigned int maskTest[PORTCNT];
-	portTest[0] = 0x00;
+	unsigned int testTimeout = 1000;
+	portTest[0] = 0x00;					//setting up iomask (Port 0 Input, Port 1 Output, Port 2[1-4] output, Port 2[5-8] input)
 	portTest[1] = 0xFF;
 	portTest[2] = 0x0F;
-
-    //demonstrate wait timeout 
-
 
 	try
     {
@@ -91,8 +94,8 @@ int _tmain(int argc, _TCHAR* argv[])
 		else
 			std::cout << "Driver Initialized.\n";
 
-		if (errCode = ResetDevice())
-		{ //make sure in clean state after initialization
+		if (errCode = ResetDevice()) //make sure in clean state after initialization
+		{ 
 			std::cout << "Failed to reset ports.\n";
 			throw errCode;
 		}
@@ -131,7 +134,8 @@ int _tmain(int argc, _TCHAR* argv[])
 
 		//set second half of third port to have falling edge interrupts
 		
-		for (int i = 20; i < 24; ++i){
+		for (int i = 20; i < 24; ++i)
+        {
 			if (errCode = EnableInterrupt(i, FALLING_EDGE))
 			{
 				std::cout << "Failed to enable interrupt.\n";
@@ -139,9 +143,9 @@ int _tmain(int argc, _TCHAR* argv[])
 			}
 		}
 
-		std::cout << "Testing Wait for Interrupt's timeout with 5 seconds\n";
+		std::cout << "Testing Wait for Interrupt's timeout with "<<testTimeout<<"  milliseconds\n";
 
-		if (WaitForInterrupt(irqArr, 500) == TIMEOUT_ERROR)
+		if (WaitForInterrupt(irqArr, testTimeout) == TIMEOUT_ERROR)
 		{
 			std::cout << "WaitForInterrupt successfully threw a timeout error\n";
 		}
@@ -149,16 +153,31 @@ int _tmain(int argc, _TCHAR* argv[])
 			std::cout << "Timeout failed to work correctly\n";
 		}
 
+		if (errCode = WritePort(1, 0xFF)) //make interrupts occur on all of port 0 by making rising edge occur on all of port 1 (should see after get interrupt)
+		{
+			std::cout << "Failed to write port\n";
+			throw errCode;
+		}
+
 		_beginthread(readInputsThread, 0, NULL); //kicks off thread that reads and prints inputs
+
+
+		if (errCode = WritePort(1, 0x00)) //Setting outputs back to 0, so rising edge interrupts trigger
+		{
+			std::cout << "Failed to write port\n";
+			throw errCode;
+		}
+
+		Sleep(1000);
 
 		while (1)
 		{
             //loops through all outputs
 			
-			for (int i = 8; i < 20; ++i) //each loop does a set bit and then clears it after one second
+			for (int i = 8; i < 20; ++i) //each loop sets a bit and then clears it after one second
 			{
 
-				if (errCode = SetBit(i))
+				if (errCode = WriteBit(i, 1)) //set
 				{
 					std::cout << "Failed to set bit : " << i << "\n";
 					throw errCode;
@@ -168,27 +187,38 @@ int _tmain(int argc, _TCHAR* argv[])
 
 				Sleep(1000); //sleep one second
 
-				if (errCode = ClearBit(i))
+				if (errCode = WriteBit(i, 0)) //clear
 				{
 					std::cout << "Failed to clear bit: " << i << "\n";
 					throw errCode;
 				}
 				else
 					std::cout << "Bit " << i << " cleared\n";
+
+				Sleep(1000);
+			}
+
+			std::cout << "\n**********\nInterrupt walk complete. Press q to quit, or any other key to restart walk\n***********\n";
+
+			_kbhit();
+			if (_getch() == 'q')
+			{
+				quitFlag = TRUE; 
+				if (errCode = ResetDevice())
+				{
+					std::cout << "Failed to disable timer.\n";
+					throw errCode;
+				}
+
+				if (errCode = CloseSession())
+				{
+					std::cout << "Failed to close Driver.\n";
+					throw errCode;
+				}
+				std::cout << "WDT closed. Exiting\n";
+				break;
 			}
             
-		}
-
-		if (errCode = ResetDevice())
-		{ //clean gpio states before closing
-			std::cout << "Failed to reset ports.\n";
-			throw errCode;
-		}
-
-		if (errCode = CloseSession())
-		{
-			std::cout << "Failed to close session.\n";
-			throw errCode;
 		}
 
 	}
@@ -222,7 +252,6 @@ int _tmain(int argc, _TCHAR* argv[])
 		system("pause");
 		return err;
 	}
-	system("pause");
 	return 0;
 }
 
